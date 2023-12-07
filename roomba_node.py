@@ -2,23 +2,17 @@
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from rclpy.qos import QoSProfile, ReliabilityPolicy
-
-
 from rclpy.action.client import ActionClient
-from rclpy.action.client import GoalStatus
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
-from action_msgs.msg import GoalStatus
-from std_msgs.msg import Header, String, Int32, Float32, UInt8, Int16 # Some topics have specific datatypes (POTENTIALLY USELESS!!!)
-
+from rclpy.executors import MultiThreadedExecutor
+from std_msgs.msg import String 
 
 # Create3 Packages
 import irobot_create_msgs
-from irobot_create_msgs.action import DriveDistance, Undock, RotateAngle, Dock, NavigateToPosition, AudioNoteSequence
+from irobot_create_msgs.action import DriveDistance, Undock, RotateAngle, NavigateToPosition, AudioNoteSequence
 from geometry_msgs.msg import PoseStamped
-from nav_msgs.msg import Odometry  # Import Odometry
 from irobot_create_msgs.srv import ResetPose
-from irobot_create_msgs.msg import AudioNoteVector, AudioNote, IrIntensityVector, IrOpcode
+from irobot_create_msgs.msg import AudioNoteVector, AudioNote
 from builtin_interfaces.msg import Duration
 
 # key_commander stuff
@@ -29,13 +23,7 @@ import random, time
 from math import pi
 from collections import deque
 
-
-# Threading
-from rclpy.executors import MultiThreadedExecutor
-from threading import RLock
-
-
-# Globals
+# Audio notes and vectors
 start_note = [ AudioNote(frequency=600, max_runtime=Duration(sec=0, nanosec= 50000000))]
 end_note =   [ AudioNote(frequency=784, max_runtime=Duration(sec=0, nanosec= 50000000))]
 rand_note =  [ AudioNote(frequency=350, max_runtime=Duration(sec=0, nanosec= 150000000))]
@@ -69,25 +57,26 @@ class Roomba(Node):
 		self.odometry_sensor = odometry_sensor
 
 		# Subscriptions: 
-		# Split up to compensate for noisy subscriptions
-		cb_dockstatus = MutuallyExclusiveCallbackGroup() # Perhaps unneeded since the dock_status_node takes care of the dockstatus
+		# Split up to compensate for noisy subscriptions. NOTE: These are probably not needed anymore since I split their purposes into their own individual nodes.
+		cb_dockstatus = MutuallyExclusiveCallbackGroup()
 		cb_ir = MutuallyExclusiveCallbackGroup()
 		cb_pose = MutuallyExclusiveCallbackGroup()
 
+		# NOTE: Subscriptions and their corresponding published topics have custom names to help me keep track of what information is being sent and received.
 		self.dock_status_sub_ = self.create_subscription(String, f'/{namespace}/check_dock_status', 
 												self.dock_status_callback, 10, callback_group=cb_dockstatus)
-		# self.ir_opcode_sub_ = self.create_subscription(IrOpcode, f'/{namespace}/ir_opcode_number', 
-		# 										self.ir_opcode_callback, qos_profile_sensor_data, callback_group=cb_ir)
+
 		self.ir_opcode_sub_ = self.create_subscription(String, f'/{namespace}/ir_opcode_number', 
-														self.ir_opcode_callback, qos_profile_sensor_data, callback_group=cb_ir)
+												self.ir_opcode_callback, qos_profile_sensor_data, callback_group=cb_ir)
 
 		self.current_pose_sub_ = self.create_subscription(PoseStamped, f'/{namespace}/pose_stamped', 
 												self.pose_callback, qos_profile_sensor_data, callback_group=cb_pose)
 
-		# Actions:
+		# Actions: Made a thread just for chirps since they are often used just after or before an action
 		cb_Action = MutuallyExclusiveCallbackGroup()
 		cb_chirp  = MutuallyExclusiveCallbackGroup()
 
+		# These are all the actions the script uses within later methods.
 		self.undock_ac = ActionClient(self, Undock, f'/{namespace}/undock',
 								 			callback_group=cb_Action)
 		self.drive_ac = ActionClient(self, DriveDistance, f'/{namespace}/drive_distance', 
@@ -99,20 +88,19 @@ class Roomba(Node):
 		self.rotate_ac = ActionClient(self, RotateAngle, f'/{namespace}/rotate_angle', 
 											callback_group=cb_Action)
 		
-		# Services:
-		# ResetPose service client and initialize PoseStamped variable for position reset using odometry
+		# ResetPose service client:
 		self.reset_pose_srv = self.create_client(ResetPose, f'/{namespace}/reset_pose')
-		# Ensure service is available
+		# Ensure service is available. Ensures that it can always reset the pose early on in the program (after undocking)
 		while not self.reset_pose_srv.wait_for_service(timeout_sec=1.0):
 			self.get_logger().info('ResetPose service not available, waiting again...')
 
-		# Variable Initialization
+		# Variable Initialization for all the published stuff from the other nodes
 		self.latest_dock_status = None
 		self.latest_pose_stamped = None
 		self.latest_ir_opcode = None
-		self.ir_opcode_history = deque(maxlen=20)  # A deque to store the history of opcodes
+		self.ir_opcode_history = deque(maxlen=20)  # A deque to store the history of opcodes. Used for initiating a backup sequence when stuck. SEE: docking()
 
-
+############################################## Continue here!!!!!!!!!!!########################################################################################################################################################################################
 	def dock_status_callback(self, msg):
 		self.latest_dock_status = msg.data
 		self.get_logger().info(f"Received /is_docked status: {self.latest_dock_status}")
@@ -254,7 +242,7 @@ class Roomba(Node):
 
 	def navigate_to_recorded_pose(self):
 		"""
-		Navigate back to the stored pose.
+		Navigate back to the stored pose using the published PoseStamped value.
 		"""
 		self.chirp(start_note)
 		print("Navigating back to home position from Odometry reading (PoseStamped)")
@@ -359,12 +347,11 @@ class Roomba(Node):
 			self.docking()
 		except Exception as error:
 			roomba.chirp(error_notes)
-			self.get_logger().error(f"Error in takeoff: {error}") # Error logging
+			self.get_logger().error(f"Error in takeoff: {error}")
 
 
 if __name__ == '__main__':
-	# rclpy.init()
-
+	# Assign all the nodes to each alias (dunno if that's the right terminologicallly)
 	roomba = Roomba(namespace)
 	exec = MultiThreadedExecutor(8)
 	exec.add_node(roomba)
