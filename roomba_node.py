@@ -101,7 +101,6 @@ class Roomba(Node):
 		self.latest_ir_opcode = None
 		self.ir_opcode_history = deque(maxlen=20)  # A deque to store the history of opcodes. Used for initiating a backup sequence when stuck. SEE: docking()
 
-############################################## Continue here!!!!!!!!!!!########################################################################################################################################################################################
 	def dock_status_callback(self, msg):
 		self.latest_dock_status = msg.data
 		self.get_logger().info(f"Received /is_docked status: {self.latest_dock_status}")
